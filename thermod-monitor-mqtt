@@ -1,0 +1,350 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Thermod monitor to forward temperature and current status to an MQTT broker
+
+@author:     Simone Rossetto
+@copyright:  2020 Simone Rossetto
+@license:    GNU General Public License v3
+@contact:    simros85@gmail.com
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+"""
+
+import os
+import sys
+import signal
+import string
+import random
+import argparse
+import requests
+import time
+import logging
+import configparser
+import paho.mqtt.client as mqtt
+
+from thermod import ThermodStatus
+from thermod.common import LogStyleAdapter, LOGGER_BASE_NAME, LOGGER_FMT_MSG, \
+    LOGGER_FMT_TIME, LOGGER_FMT_STYLE, LOGGER_FMT_MSG_SYSLOG, LOGGER_FMT_DATETIME, \
+    RET_CODE_OK, RET_CODE_CFG_FILE_UNKNOWN_ERR, RET_CODE_CFG_FILE_INVALID, \
+    RET_CODE_CFG_FILE_MISSING, RET_CODE_RUN_OTHER_ERR
+from logging.handlers import SysLogHandler
+
+__version__ = '0.0.0.dev1'
+__date__ = '2020-07-01'
+__updated__ = '2020-07-02'
+
+__monitor_name__ = 'mqtt'
+
+# setting up logging system
+logger = LogStyleAdapter(logging.getLogger('{}.{}'.format(LOGGER_BASE_NAME, __monitor_name__)))
+logger.setLevel(logging.INFO)
+
+# config filename and search paths (the last found overwrites the previouses)
+MAIN_CONFIG_FILENAME = 'monitor-mqtt.conf'
+MAIN_CONFIG_DEFAULT_FILE = os.path.join(os.path.expanduser('~/.thermod'), MAIN_CONFIG_FILENAME)
+MAIN_CONFIG_FILES = [os.path.join('/etc/thermod', MAIN_CONFIG_FILENAME),
+                     os.path.join('/var/lib/thermod', MAIN_CONFIG_FILENAME),
+                     os.path.join('/usr/local/etc/thermod', MAIN_CONFIG_FILENAME),
+                     os.path.join(os.path.expanduser('~/.config/thermod'), MAIN_CONFIG_FILENAME),
+                     MAIN_CONFIG_DEFAULT_FILE]
+
+# serialnum filename and search paths (the last found overwrites the previouses)
+SERIALNUM_CONFIG_FILENAME = 'serial-number.conf'
+SERIALNUM_CONFIG_DEFAULT_FILE = os.path.join(os.path.expanduser('~/.thermod'), SERIALNUM_CONFIG_FILENAME)
+SERIALNUM_CONFIG_FILES = [os.path.join('/etc/thermod', SERIALNUM_CONFIG_FILENAME),
+                          os.path.join('/var/lib/thermod', SERIALNUM_CONFIG_FILENAME),
+                          os.path.join('/usr/local/etc/thermod', SERIALNUM_CONFIG_FILENAME),
+                          os.path.join(os.path.expanduser('~/.config/thermod'), SERIALNUM_CONFIG_FILENAME),
+                          SERIALNUM_CONFIG_DEFAULT_FILE]
+
+# topics
+_TOPIC_AVAILABILITY = 'thermod/{}/availability'
+_TOPIC_STATUS = 'thermod/{}/status'
+_TOPIC_HOMEASSISTANT = 'homeassistant/sensor/thermod_{serial}/{sensor}/config'
+
+# shutdown check and return code
+running = True
+main_return_code = RET_CODE_OK
+
+def shutdown(signum=None, frame=None, exitcode=0):
+    global running, main_return_code
+    logger.info('shutdown requested')
+    running = False
+    main_return_code = exitcode
+
+signal.signal(signal.SIGTERM, shutdown)
+
+# parse input arguments
+parser = argparse.ArgumentParser(description='Thermod monitor for MQTT broker: read data from Thermod and send it to an MQTT broker.')
+parser.add_argument('-c', '--config', action='store', default=None, help='path to configuration file')
+parser.add_argument('--serial', action='store', default=None, help='path to configuration file with Thermod serial number')
+parser.add_argument('-L', '--log', action='store', default=None, help='write log messages to LOG file (full path)')
+parser.add_argument('-D', '--debug', action='store_true', help='start the monitor in debug mode')
+parser.add_argument('--syslog', action='store_true', help='log messages to syslog (useful if started by systemd)')
+parser.add_argument('-v', '--version', action='version', version='%(prog)s {}'.format(__version__))
+args = parser.parse_args()
+
+# set logger
+if args.debug:
+    logger.setLevel(logging.DEBUG)
+
+if args.syslog:
+    syslog = SysLogHandler(address='/dev/log', facility=SysLogHandler.LOG_DAEMON)
+    syslog.setFormatter(logging.Formatter(fmt=LOGGER_FMT_MSG_SYSLOG,
+                                          style=LOGGER_FMT_STYLE))
+    logger.addHandler(syslog)
+else:
+    console = logging.StreamHandler(sys.stdout)
+    console.setFormatter(logging.Formatter(fmt=LOGGER_FMT_MSG,
+                                           datefmt=LOGGER_FMT_TIME,
+                                           style=LOGGER_FMT_STYLE))
+    logger.addHandler(console)
+
+if args.log:
+    try:
+        logfile = logging.FileHandler(args.log, mode='a')
+    
+    except PermissionError as pe:
+        logger.warning('cannot write log to `{}`: {}', args.log, pe)
+        logger.info('the monitor will start without logfile')
+    
+    else:
+        logfile.setFormatter(logging.Formatter(fmt=LOGGER_FMT_MSG,
+                                               datefmt=LOGGER_FMT_DATETIME,
+                                               style=LOGGER_FMT_STYLE))
+        logger.addHandler(logfile)
+    
+        if args.syslog:
+            # When a custom log file is configured and the deamon in started
+            # in background, only warnings and errors are printed to syslog.
+            syslog.setLevel(logging.WARNING)
+        
+        logger.debug('logging to file {}', args.log)
+
+# read config files
+config_files = [args.config] if args.config else MAIN_CONFIG_FILES
+serial_files = [args.serial] if args.serial else SERIALNUM_CONFIG_FILES
+config_files.extends(serial_files)
+
+try:
+    cfg_err = RET_CODE_OK
+    cfg = configparser.ConfigParser()
+    
+    logger.debug('searching configuration in files {}', config_files)
+    _cfg_files_found = cfg.read(config_files)
+    
+    if _cfg_files_found:
+        logger.debug('configuration files found: {}', _cfg_files_found)
+        
+    else:
+        raise FileNotFoundError()
+    
+    DEVICE_NAME = cfg.get('monitor/mqtt', 'device_name', fallback='Thermod')
+    logger.debug('config device name: {}', DEVICE_NAME)
+    
+    THERMOD_URL = cfg.get('monitor/mqtt', 'thermod_url').rstrip('/')
+    logger.debug('config Thermod url: {}', THERMOD_URL)
+    
+    THERMOD_SCALE = cfg.get('monitor/mqtt', 'thermod_scale')
+    logger.debug('config degree scale: {}', THERMOD_SCALE)
+    
+    SLEEP_TIME = cfg.getint('monitor/mqtt', 'sleep_time', fallback=30)
+    logger.debug('config sleep time for errors: {} seconds', SLEEP_TIME)
+
+    FORCE_UPDATE_TIME = cfg.getint('monitor/mqtt', 'force_update_time', fallback=30)
+    logger.debug('config force update time: {} minutes', FORCE_UPDATE_TIME)
+    
+    HOMEASSISTANT = cfg.get('monitor/mqtt', 'homeassistant', fallback=False)
+    logger.debug('config home-assistant discovery: {}', 'enabled' if HOMEASSISTANT else 'disabled')
+    
+    BROKER_HOST = cfg.get('monitor/mqtt/broker', 'host', fallback='localhost')
+    BROKER_PORT = cfg.getint('monitor/mqtt/broker', 'port', fallback=1833)
+    BROKER_USER = cfg.get('monitor/mqtt/broker', 'username', fallback=None)
+    BROKER_PASSWD = cfg.get('monitor/mqtt/broker', 'password', fallback=None)
+    BROKER_CA = cfg.get('monitor/mqtt/broker', 'cacert', fallback=None)
+    BROKER_CERT = cfg.get('monitor/mqtt/broker', 'certfile', fallback=None)
+    BROKER_KEY = cfg.get('monitor/mqtt/broker', 'keyfile', fallback=None)
+    BROKER_INSECURE = cfg.getbool('monitor/mqtt/broker', 'insecure', fallback=False)
+    # TODO log dei parametri del broker
+    
+    try:
+        SERIAL_NUMBER = cfg['thermod']['serial_number']
+        TOPIC_AVAILABILITY = _TOPIC_AVAILABILITY.format(SERIAL_NUMBER)
+        TOPIC_STATUS = _TOPIC_STATUS.format(SERIAL_NUMBER)
+    
+    except KeyError:
+        # generate serial number
+        SERIAL_NUMBER = ''.join([random.choice('abcdef0123456789') for i in range(8)])
+        
+        # save serial number to file
+        cfgserial = configparser.ConfigParser()
+        cfgserial['thermod'] = {'serial_number': SERIAL_NUMBER}
+        os.makedirs(os.path.dirname(SERIALNUM_CONFIG_DEFAULT_FILE), exist_ok=True)
+        with open(SERIALNUM_CONFIG_DEFAULT_FILE, 'w') as cfgfile:
+            cfgserial.write(cfgfile)
+        # TODO intercettare errori di scrittura file
+    
+    finally:
+        logger.debug('config serial number: {}', SERIAL_NUMBER)
+
+except ValueError as ve:
+    logger.error('invalid value in configuration file: {}', ve)
+    cfe_error = RET_CODE_CFG_FILE_INVALID
+
+except FileNotFoundError as fnfe:
+    logger.error('no configuration file found, cannot continue')
+    cfe_error = RET_CODE_CFG_FILE_MISSING
+
+except configparser.Error as cpe:
+    logger.error('error in configuration file: {}', cpe)
+    cfg_err = RET_CODE_CFG_FILE_INVALID
+
+except Exception as e:
+    logger.critical('unknown error in configuration file: {}', e, exc_info=True)
+    cfg_err = RET_CODE_CFG_FILE_UNKNOWN_ERR
+
+finally:
+    if cfg_err != RET_CODE_OK:
+        logger.info('closing monitor with return code {}', cfg_err)
+        exit(cfg_err)
+
+# callback
+def on_connect(client, userdata, flags, rc):
+    logger.debug('connected to MQTT broker on {}', BROKER_HOST)
+    client.mqtt(TOPIC_AVAILABILITY, 'online')
+
+def on_disconnect(client, userdata, flags, rc):
+    # TODO capire se questo messaggio parte e mettere un log
+    client.mqtt(TOPIC_AVAILABILITY, 'offline', retain=True)
+
+# main
+logger.debug('creating mqtt client')
+client = mqtt.Client()
+client.on_connect = on_connect
+client.on_disconnect = on_disconnect
+
+if BROKER_CA:
+    logger.debug('enabling SSL/TLS for mqtt')
+    mqtt.tls_set(ca_certs=BROKER_CA, certfile=BROKER_CERT, keyfile=BROKER_KEY)
+    mqtt.tls_insecure_set(BROKER_INSECURE)
+
+if BROKER_USER:
+    logger.debug('connecting to mqtt using username `{}`', BROKER_USER)
+    mqtt.username_pw_set(BROKER_USER, BROKER_PASSWD)
+
+logger.debug('setting mqtt will message')
+mqtt.will_set(TOPIC_AVAILABILITY, 'offline', retain=True)
+
+logger.debug('opening connection with mqtt broker')
+client.connect(BROKER_HOST, BROKER_PORT)
+
+logger.debug('opening connection with thermod')
+with requests.Session() as thermod:
+    try:
+        logger.info('Thermod to MQTT monitor v{} started', __version__)
+        
+        if HOMEASSISTANT:
+            logger.debug('retrieving Thermod version')
+            t_resp = thermod.get('{}/version'.format(THERMOD_URL), timeout=10)
+            # TODO se eccezione si deve uscire, vanno gestite
+            t_resp.raise_for_status()
+            t_version = t_resp.json()['version']
+            
+            # temperatura
+            topic = _TOPIC_HOMEASSISTANT.format({'serial': SERIAL_NUMBER, 'sensor': 'temperature'})
+            payload = {'availability_topic': TOPIC_AVAILABILITY,
+                       'device': {'identifiers': ['thermod_{}'.format(SERIAL_NUMBER)],
+                                  'manufacturer': 'Simone Rossetto',
+                                  'model': 'Thermod v{}'.format(t_version[0],
+                                  'name': 'Thermod',
+                                  'sw_version': t_version},
+                       'device_class': 'temperature',
+                       'name': 'Thermod temperature',
+                       'state_topic': 'thermod/{}/status'.format(SERIAL_NUMBER),
+                       'value_template': '{{ value_json.current_temperature }}',
+                       'unique_id': 'thermod_{}_temperature'.format(SERIAL_NUMBER),
+                       'unit_of_measurement': '°C'}  # TODO da sistemare
+            client.publish(topic, payload)
+            
+        
+        # create old status
+        t_old_status = ThermodStatus(0)
+        
+        # set first update time (never, epoch)
+        last_update = 0
+        
+        while running:
+            _error = False
+            try:
+                logger.debug('longpolling Thermod status')
+                t_resp = thermod.get('{}/monitor?name={}'.format(THERMOD_URL, __monitor_name__),
+                                     timeout=(10, 600))
+                t_resp.raise_for_status()
+                
+                logger.debug('processing data returned from Thermod')
+                t_jrsp = t_resp.json()
+                t_status = ThermodStatus(**t_jrsp)
+            
+            except (KeyError, ValueError) as ve:
+                logger.error('invalid data returned from Thermod: {}', ve)
+                _error = True
+            
+            except requests.exceptions.Timeout as to:
+                logger.error('no response frome Thermod in 10 minutes, probably it si down or unreachable')
+                _error = True
+            
+            except requests.exceptions.RequestException as re:
+                logger.error('error reading Thermod data: {}', re)
+                _error = True
+            
+            else:
+                _update = False
+                if t_old_status[1:] != t_status[1:]:
+                    _update = True
+                    logger.debug('publish message due to Thermod status change')
+                
+                elif (time.time() - last_update) >= FORCE_UPDATE_TIME * 60:
+                    _update = True
+                    logger.debug('publish message due to timeout')
+                
+                else:
+                    logger.debug('old status and current status are equal, no need to publish a message')
+                
+                if _update:
+                    # save last time update
+                    last_update = time.time()
+                    
+                    # publish message
+                    client.publish(TOPIC_STATUS, t_status[1:].to_json())  # TODO adattare il payload
+                    
+                    # TODO intercettare gli errori
+                    # TODO sono arrivato fino a qui
+            
+            if _error:
+                logger.debug('sleeping for {} seconds', SLEEP_TIME)
+                time.sleep(SLEEP_TIME)
+    
+    except Exception as e:
+        logger.critical('unknown error: {}', e)
+        main_return_code = RET_CODE_RUN_OTHER_ERR
+    
+    except KeyboardInterrupt:
+        logger.debug('shutdown requested by keyboard interrupt')
+        shutdown()
+
+logger.info('closing monitor with return code {}', main_return_code)
+exit(main_return_code)
+
+# vim: fileencoding=utf-8 syntax=python tabstop=4 shiftwidth=4 expandtab
