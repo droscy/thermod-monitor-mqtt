@@ -27,10 +27,11 @@ import sys
 import signal
 import string
 import random
-import argparse
-import requests
 import time
 import logging
+import json
+import argparse
+import requests
 import configparser
 import paho.mqtt.client as mqtt
 
@@ -43,7 +44,7 @@ from logging.handlers import SysLogHandler
 
 __version__ = '0.0.0.dev1'
 __date__ = '2020-07-01'
-__updated__ = '2020-07-02'
+__updated__ = '2020-07-23'
 
 __monitor_name__ = 'mqtt'
 
@@ -136,7 +137,7 @@ if args.log:
 # read config files
 config_files = [args.config] if args.config else MAIN_CONFIG_FILES
 serial_files = [args.serial] if args.serial else SERIALNUM_CONFIG_FILES
-config_files.extends(serial_files)
+config_files.extend(serial_files)
 
 try:
     cfg_err = RET_CODE_OK
@@ -159,6 +160,7 @@ try:
     
     THERMOD_SCALE = cfg.get('monitor/mqtt', 'thermod_scale')
     logger.debug('config degree scale: {}', THERMOD_SCALE)
+    # TODO check if different from celsius or fahrenheit
     
     SLEEP_TIME = cfg.getint('monitor/mqtt', 'sleep_time', fallback=30)
     logger.debug('config sleep time for errors: {} seconds', SLEEP_TIME)
@@ -166,7 +168,7 @@ try:
     FORCE_UPDATE_TIME = cfg.getint('monitor/mqtt', 'force_update_time', fallback=30)
     logger.debug('config force update time: {} minutes', FORCE_UPDATE_TIME)
     
-    HOMEASSISTANT = cfg.get('monitor/mqtt', 'homeassistant', fallback=False)
+    HOMEASSISTANT = cfg.getboolean('monitor/mqtt', 'homeassistant', fallback=False)
     logger.debug('config home-assistant discovery: {}', 'enabled' if HOMEASSISTANT else 'disabled')
     
     BROKER_HOST = cfg.get('monitor/mqtt/broker', 'host', fallback='localhost')
@@ -176,7 +178,7 @@ try:
     BROKER_CA = cfg.get('monitor/mqtt/broker', 'cacert', fallback=None)
     BROKER_CERT = cfg.get('monitor/mqtt/broker', 'certfile', fallback=None)
     BROKER_KEY = cfg.get('monitor/mqtt/broker', 'keyfile', fallback=None)
-    BROKER_INSECURE = cfg.getbool('monitor/mqtt/broker', 'insecure', fallback=False)
+    BROKER_INSECURE = cfg.getboolean('monitor/mqtt/broker', 'insecure', fallback=False)
     # TODO log dei parametri del broker
     
     try:
@@ -221,39 +223,35 @@ finally:
         exit(cfg_err)
 
 # callback
-def on_connect(client, userdata, flags, rc):
+def connect_callback(client, userdata, flags, rc):
     logger.debug('connected to MQTT broker on {}', BROKER_HOST)
-    client.mqtt(TOPIC_AVAILABILITY, 'online')
-
-def on_disconnect(client, userdata, flags, rc):
-    # TODO capire se questo messaggio parte e mettere un log
-    client.mqtt(TOPIC_AVAILABILITY, 'offline', retain=True)
+    client.publish(TOPIC_AVAILABILITY, 'online', retain=True)
 
 # main
 logger.debug('creating mqtt client')
 client = mqtt.Client()
-client.on_connect = on_connect
-client.on_disconnect = on_disconnect
+client.on_connect = connect_callback
 
 if BROKER_CA:
     logger.debug('enabling SSL/TLS for mqtt')
-    mqtt.tls_set(ca_certs=BROKER_CA, certfile=BROKER_CERT, keyfile=BROKER_KEY)
-    mqtt.tls_insecure_set(BROKER_INSECURE)
+    client.tls_set(ca_certs=BROKER_CA, certfile=BROKER_CERT, keyfile=BROKER_KEY)
+    client.tls_insecure_set(BROKER_INSECURE)
 
 if BROKER_USER:
     logger.debug('connecting to mqtt using username `{}`', BROKER_USER)
-    mqtt.username_pw_set(BROKER_USER, BROKER_PASSWD)
+    client.username_pw_set(BROKER_USER, BROKER_PASSWD)
 
 logger.debug('setting mqtt will message')
-mqtt.will_set(TOPIC_AVAILABILITY, 'offline', retain=True)
+client.will_set(TOPIC_AVAILABILITY, 'offline', retain=True)
 
 logger.debug('opening connection with mqtt broker')
 client.connect(BROKER_HOST, BROKER_PORT)
+client.loop_start()
 
 logger.debug('opening connection with thermod')
 with requests.Session() as thermod:
     try:
-        logger.info('Thermod to MQTT monitor v{} started', __version__)
+        logger.info('Thermod monitor for MQTT v{} started', __version__)
         
         if HOMEASSISTANT:
             logger.debug('retrieving Thermod version')
@@ -262,12 +260,12 @@ with requests.Session() as thermod:
             t_resp.raise_for_status()
             t_version = t_resp.json()['version']
             
-            # temperatura
+            # temperature
             topic = _TOPIC_HOMEASSISTANT.format({'serial': SERIAL_NUMBER, 'sensor': 'temperature'})
             payload = {'availability_topic': TOPIC_AVAILABILITY,
                        'device': {'identifiers': ['thermod_{}'.format(SERIAL_NUMBER)],
                                   'manufacturer': 'Simone Rossetto',
-                                  'model': 'Thermod v{}'.format(t_version[0],
+                                  'model': 'Thermod monitor for MQTT v{}'.format(__version__),
                                   'name': 'Thermod',
                                   'sw_version': t_version},
                        'device_class': 'temperature',
@@ -275,8 +273,9 @@ with requests.Session() as thermod:
                        'state_topic': 'thermod/{}/status'.format(SERIAL_NUMBER),
                        'value_template': '{{ value_json.current_temperature }}',
                        'unique_id': 'thermod_{}_temperature'.format(SERIAL_NUMBER),
-                       'unit_of_measurement': '°C'}  # TODO da sistemare
-            client.publish(topic, payload)
+                       'unit_of_measurement': '°{}'.format(THERMOD_SCALE[0].upper())}
+            _msginfo = client.publish(topic, payload)
+            # TODO intercettare errori e gestire
             
         
         # create old status
@@ -302,12 +301,16 @@ with requests.Session() as thermod:
                 _error = True
             
             except requests.exceptions.Timeout as to:
-                logger.error('no response frome Thermod in 10 minutes, probably it si down or unreachable')
+                logger.error('no response from Thermod in 10 minutes, probably it is down or unreachable')
                 _error = True
             
             except requests.exceptions.RequestException as re:
                 logger.error('error reading Thermod data: {}', re)
                 _error = True
+
+            except KeyboardInterrupt:
+                logger.debug('shutdown requested by keyboard interrupt')
+                shutdown()
             
             else:
                 _update = False
@@ -323,13 +326,24 @@ with requests.Session() as thermod:
                     logger.debug('old status and current status are equal, no need to publish a message')
                 
                 if _update:
+                    # save old thermod status
+                    t_old_status = t_status
+                    
                     # save last time update
                     last_update = time.time()
                     
                     # publish message
-                    client.publish(TOPIC_STATUS, t_status[1:].to_json())  # TODO adattare il payload
+                    payload = {'mode': t_status.status,
+                               'cooling': t_status.cooling,
+                               'status': 'on' if t_status.heating_status else 'off',
+                               'current_temperature': t_status.current_temperature,
+                               'target_temperature': t_status.target_temperature}
+                    _msginfo = client.publish(TOPIC_STATUS, json.dumps(payload), retain=True)
                     
-                    # TODO intercettare gli errori
+                    if _msginfo.rc != mqtt.MQTT_ERR_SUCCESS:
+                        # TODO intercettare gli errori
+                        pass
+                    
                     # TODO sono arrivato fino a qui
             
             if _error:
@@ -337,12 +351,19 @@ with requests.Session() as thermod:
                 time.sleep(SLEEP_TIME)
     
     except Exception as e:
-        logger.critical('unknown error: {}', e)
+        logger.critical('unknown error: {}', e, exc_info=True)
         main_return_code = RET_CODE_RUN_OTHER_ERR
     
     except KeyboardInterrupt:
         logger.debug('shutdown requested by keyboard interrupt')
         shutdown()
+    
+    finally:
+        logger.debug('closing connection with mqtt')
+        client.publish(TOPIC_STATUS, '', retain=True).wait_for_publish()
+        client.publish(TOPIC_AVAILABILITY, 'offline', retain=True).wait_for_publish()
+        client.loop_stop()
+        client.disconnect()
 
 logger.info('closing monitor with return code {}', main_return_code)
 exit(main_return_code)
