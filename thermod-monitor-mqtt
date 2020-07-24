@@ -43,7 +43,7 @@ from thermod.common import LogStyleAdapter, LOGGER_BASE_NAME, LOGGER_FMT_MSG, \
     RET_CODE_CFG_FILE_MISSING, RET_CODE_RUN_OTHER_ERR
 from logging.handlers import SysLogHandler
 
-__version__ = '0.0.0.dev2'
+__version__ = '0.0.0.dev3'
 __date__ = '2020-07-01'
 __updated__ = '2020-07-24'
 
@@ -73,8 +73,8 @@ SERIALNUM_CONFIG_FILES = [os.path.join('/etc/thermod', SERIALNUM_CONFIG_FILENAME
 
 # topics
 _TOPIC_AVAILABILITY = 'thermod/{}/availability'
-_TOPIC_STATUS = 'thermod/{}/status'
-_TOPIC_HOMEASSISTANT = 'homeassistant/sensor/thermod_{serial}/{sensor}/config'
+_TOPIC_THERMOD_STATUS = 'thermod/{}/status'
+_TOPIC_HOMEASSISTANT = 'homeassistant/{type}/thermod_{serial}/{object}/config'
 
 # shutdown check and return code
 running = True
@@ -184,8 +184,6 @@ try:
     
     try:
         SERIAL_NUMBER = cfg['thermod']['serial_number']
-        TOPIC_AVAILABILITY = _TOPIC_AVAILABILITY.format(SERIAL_NUMBER)
-        TOPIC_STATUS = _TOPIC_STATUS.format(SERIAL_NUMBER)
     
     except KeyError:
         # generate serial number
@@ -200,6 +198,8 @@ try:
         # TODO intercettare errori di scrittura file
     
     finally:
+        TOPIC_AVAILABILITY = _TOPIC_AVAILABILITY.format(SERIAL_NUMBER)
+        TOPIC_THERMOD_STATUS = _TOPIC_THERMOD_STATUS.format(SERIAL_NUMBER)
         logger.debug('config serial number: {}', SERIAL_NUMBER)
 
 except ValueError as ve:
@@ -262,24 +262,44 @@ with requests.Session() as thermod:
             t_version = t_resp.json()['version']
             
             # common device for all sensors
-            _device = {'identifiers': ['thermod_{}'.format(SERIAL_NUMBER)],
-                       'manufacturer': 'Simone Rossetto',
-                       'model': 'Thermod monitor for MQTT v{}'.format(__version__),
-                       'name': DEVICE_NAME,
-                       'sw_version': t_version}
+            device = {'identifiers': ['thermod_{}'.format(SERIAL_NUMBER)],
+                      'manufacturer': 'Simone Rossetto',
+                      'model': 'Thermod monitor for MQTT v{}'.format(__version__),
+                      'name': DEVICE_NAME,
+                      'sw_version': t_version}
             
             # temperature
-            topic = _TOPIC_HOMEASSISTANT.format(serial=SERIAL_NUMBER, sensor='temperature')
+            topic = _TOPIC_HOMEASSISTANT.format(type='sensor',
+                                                serial=SERIAL_NUMBER,
+                                                object='temperature')
+            
             payload = {'availability_topic': TOPIC_AVAILABILITY,
-                       'device': _device,
+                       'device': device,
                        'device_class': 'temperature',
                        'name': '{} temperature'.format(DEVICE_NAME),
-                       'state_topic': TOPIC_STATUS,
+                       'state_topic': TOPIC_THERMOD_STATUS,
                        'value_template': '{{ value_json.current_temperature }}',
                        'unique_id': 'thermod_{}_temperature'.format(SERIAL_NUMBER),
                        'unit_of_measurement': '°{}'.format(THERMOD_SCALE[0].upper())}
+            
             _msginfo = client.publish(topic, json.dumps(payload))
             # TODO intercettare errori e gestire
+            
+            # status
+            topic = _TOPIC_HOMEASSISTANT.format(type='binary_sensor',
+                                                serial=SERIAL_NUMBER,
+                                                object='status')
+            
+            payload = {'availability_topic': TOPIC_AVAILABILITY,
+                       'device': device,
+                       'name': '{} current status'.format(DEVICE_NAME),
+                       'state_topic': TOPIC_THERMOD_STATUS,
+                       'value_template': '{{ value_json.status }}',
+                       'unique_id': 'thermod_{}_temperature'.format(SERIAL_NUMBER)}
+            
+            _msginfo = client.publish(topic, json.dumps(payload))
+            # TODO intercettare errori e gestire
+            
             
             # TODO aggiungere altri sensori
             
@@ -338,13 +358,24 @@ with requests.Session() as thermod:
                     # save last time update
                     last_update = time.time()
                     
+                    # encode mode (new name for status)
+                    if t_status.status in ('on', 'off', 'auto'):
+                        _mode = t_status.status[0].upper() + t_status.status[1:]
+                    elif t_status.status in ('tmin', 'tmax'):
+                        _mode = 't_{}'.format(t_status.status[1:])
+                    elif t_status.status == 't0':
+                        _mode = 'Antifreeze'
+                    else:
+                        _mode = t_status.status
+                    
                     # publish message
-                    payload = {'mode': t_status.status,
-                               'cooling': t_status.cooling,
-                               'status': 'on' if t_status.heating_status else 'off',
+                    payload = {'mode': _mode,
+                               'device': 'Cooling' if t_status.cooling else 'Heating',
+                               'status': 'on' if t_status.heating_status==1 else 'off',
                                'current_temperature': t_status.current_temperature,
                                'target_temperature': t_status.target_temperature}
-                    _msginfo = client.publish(TOPIC_STATUS, json.dumps(payload), retain=True)
+                    
+                    _msginfo = client.publish(TOPIC_THERMOD_STATUS, json.dumps(payload), retain=True)
                     
                     if _msginfo.rc != mqtt.MQTT_ERR_SUCCESS:
                         # TODO intercettare gli errori
@@ -364,7 +395,7 @@ with requests.Session() as thermod:
     
     finally:
         logger.debug('closing connection with mqtt')
-        client.publish(TOPIC_STATUS, '', retain=True).wait_for_publish()
+        client.publish(TOPIC_THERMOD_STATUS, '', retain=True).wait_for_publish()
         client.publish(TOPIC_AVAILABILITY, 'offline', retain=True).wait_for_publish()
         client.loop_stop()
         client.disconnect()
