@@ -31,8 +31,9 @@ import time
 import logging
 import json
 import argparse
-import requests
 import configparser
+
+import requests
 import paho.mqtt.client as mqtt
 
 from thermod import ThermodStatus
@@ -42,9 +43,9 @@ from thermod.common import LogStyleAdapter, LOGGER_BASE_NAME, LOGGER_FMT_MSG, \
     RET_CODE_CFG_FILE_MISSING, RET_CODE_RUN_OTHER_ERR
 from logging.handlers import SysLogHandler
 
-__version__ = '0.0.0.dev1'
+__version__ = '0.0.0.dev2'
 __date__ = '2020-07-01'
-__updated__ = '2020-07-23'
+__updated__ = '2020-07-24'
 
 __monitor_name__ = 'mqtt'
 
@@ -89,8 +90,8 @@ signal.signal(signal.SIGTERM, shutdown)
 
 # parse input arguments
 parser = argparse.ArgumentParser(description='Thermod monitor for MQTT broker: read data from Thermod and send it to an MQTT broker.')
-parser.add_argument('-c', '--config', action='store', default=None, help='path to configuration file')
-parser.add_argument('--serial', action='store', default=None, help='path to configuration file with Thermod serial number')
+parser.add_argument('-C', '--config', action='store', default=None, help='path to configuration file')
+parser.add_argument('--config-serial', action='store', default=None, help='path to configuration file with Thermod serial number')
 parser.add_argument('-L', '--log', action='store', default=None, help='write log messages to LOG file (full path)')
 parser.add_argument('-D', '--debug', action='store_true', help='start the monitor in debug mode')
 parser.add_argument('--syslog', action='store_true', help='log messages to syslog (useful if started by systemd)')
@@ -136,7 +137,7 @@ if args.log:
 
 # read config files
 config_files = [args.config] if args.config else MAIN_CONFIG_FILES
-serial_files = [args.serial] if args.serial else SERIALNUM_CONFIG_FILES
+serial_files = [args.config_serial] if args.config_serial else SERIALNUM_CONFIG_FILES
 config_files.extend(serial_files)
 
 try:
@@ -260,22 +261,27 @@ with requests.Session() as thermod:
             t_resp.raise_for_status()
             t_version = t_resp.json()['version']
             
+            # common device for all sensors
+            _device = {'identifiers': ['thermod_{}'.format(SERIAL_NUMBER)],
+                       'manufacturer': 'Simone Rossetto',
+                       'model': 'Thermod monitor for MQTT v{}'.format(__version__),
+                       'name': DEVICE_NAME,
+                       'sw_version': t_version}
+            
             # temperature
-            topic = _TOPIC_HOMEASSISTANT.format({'serial': SERIAL_NUMBER, 'sensor': 'temperature'})
+            topic = _TOPIC_HOMEASSISTANT.format(serial=SERIAL_NUMBER, sensor='temperature')
             payload = {'availability_topic': TOPIC_AVAILABILITY,
-                       'device': {'identifiers': ['thermod_{}'.format(SERIAL_NUMBER)],
-                                  'manufacturer': 'Simone Rossetto',
-                                  'model': 'Thermod monitor for MQTT v{}'.format(__version__),
-                                  'name': 'Thermod',
-                                  'sw_version': t_version},
+                       'device': _device,
                        'device_class': 'temperature',
-                       'name': 'Thermod temperature',
-                       'state_topic': 'thermod/{}/status'.format(SERIAL_NUMBER),
+                       'name': '{} temperature'.format(DEVICE_NAME),
+                       'state_topic': TOPIC_STATUS,
                        'value_template': '{{ value_json.current_temperature }}',
                        'unique_id': 'thermod_{}_temperature'.format(SERIAL_NUMBER),
                        'unit_of_measurement': '°{}'.format(THERMOD_SCALE[0].upper())}
-            _msginfo = client.publish(topic, payload)
+            _msginfo = client.publish(topic, json.dumps(payload))
             # TODO intercettare errori e gestire
+            
+            # TODO aggiungere altri sensori
             
         
         # create old status
@@ -343,8 +349,6 @@ with requests.Session() as thermod:
                     if _msginfo.rc != mqtt.MQTT_ERR_SUCCESS:
                         # TODO intercettare gli errori
                         pass
-                    
-                    # TODO sono arrivato fino a qui
             
             if _error:
                 logger.debug('sleeping for {} seconds', SLEEP_TIME)
