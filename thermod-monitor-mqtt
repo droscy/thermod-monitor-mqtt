@@ -43,9 +43,9 @@ from thermod.common import LogStyleAdapter, LOGGER_BASE_NAME, LOGGER_FMT_MSG, \
     RET_CODE_CFG_FILE_MISSING, RET_CODE_RUN_OTHER_ERR
 from logging.handlers import SysLogHandler
 
-__version__ = '0.0.0.dev3'
+__version__ = '0.0.0.dev4'
 __date__ = '2020-07-01'
-__updated__ = '2020-07-24'
+__updated__ = '2020-08-02'
 
 __monitor_name__ = 'mqtt'
 
@@ -313,9 +313,15 @@ with requests.Session() as thermod:
         while running:
             _error = False
             try:
-                logger.debug('longpolling Thermod status')
-                t_resp = thermod.get('{}/monitor?name={}'.format(THERMOD_URL, __monitor_name__),
-                                     timeout=(10, 600))
+                if last_update > 0:
+                    logger.debug('longpolling Thermod status')
+                    t_url = '{}/monitor?name={}'.format(THERMOD_URL, __monitor_name__)
+                
+                else:
+                    logger.debug('retrieving Thermod current status')
+                    t_url = '{}/status'.format(THERMOD_URL)
+                
+                t_resp = thermod.get(t_url, timeout=(10, 600))
                 t_resp.raise_for_status()
                 
                 logger.debug('processing data returned from Thermod')
