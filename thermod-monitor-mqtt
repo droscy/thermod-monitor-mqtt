@@ -43,9 +43,9 @@ from thermod.common import LogStyleAdapter, LOGGER_BASE_NAME, LOGGER_FMT_MSG, \
     RET_CODE_CFG_FILE_MISSING, RET_CODE_RUN_OTHER_ERR
 from logging.handlers import SysLogHandler
 
-__version__ = '0.0.0.dev4'
+__version__ = '0.0.0.dev5'
 __date__ = '2020-07-01'
-__updated__ = '2020-08-02'
+__updated__ = '2020-10-21'
 
 __monitor_name__ = 'mqtt'
 
@@ -87,6 +87,7 @@ def shutdown(signum=None, frame=None, exitcode=0):
     main_return_code = exitcode
 
 signal.signal(signal.SIGTERM, shutdown)
+# TODO add USR1 signal to force mqtt update
 
 # parse input arguments
 parser = argparse.ArgumentParser(description='Thermod monitor for MQTT broker: read data from Thermod and send it to an MQTT broker.')
@@ -295,6 +296,8 @@ with requests.Session() as thermod:
                        'name': '{} current status'.format(DEVICE_NAME),
                        'state_topic': TOPIC_THERMOD_STATUS,
                        'value_template': '{{ value_json.status }}',
+                       'payload_on': 'on',
+                       'payload_off': 'off',
                        'unique_id': 'thermod_{}_temperature'.format(SERIAL_NUMBER)}
             
             _msginfo = client.publish(topic, json.dumps(payload))
