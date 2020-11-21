@@ -43,9 +43,9 @@ from thermod.common import LogStyleAdapter, LOGGER_BASE_NAME, LOGGER_FMT_MSG, \
     RET_CODE_CFG_FILE_MISSING, RET_CODE_RUN_OTHER_ERR
 from logging.handlers import SysLogHandler
 
-__version__ = '0.0.0.dev5'
+__version__ = '0.0.0.dev6'
 __date__ = '2020-07-01'
-__updated__ = '2020-10-21'
+__updated__ = '2020-11-21'
 
 __monitor_name__ = 'mqtt'
 
@@ -255,57 +255,8 @@ with requests.Session() as thermod:
     try:
         logger.info('Thermod monitor for MQTT v{} started', __version__)
         
-        if HOMEASSISTANT:
-            logger.debug('retrieving Thermod version')
-            t_resp = thermod.get('{}/version'.format(THERMOD_URL), timeout=10)
-            # TODO se eccezione si deve uscire, vanno gestite
-            t_resp.raise_for_status()
-            t_version = t_resp.json()['version']
-            
-            # common device for all sensors
-            device = {'identifiers': ['thermod_{}'.format(SERIAL_NUMBER)],
-                      'manufacturer': 'Simone Rossetto',
-                      'model': 'Thermod monitor for MQTT v{}'.format(__version__),
-                      'name': DEVICE_NAME,
-                      'sw_version': t_version}
-            
-            # temperature
-            topic = _TOPIC_HOMEASSISTANT.format(type='sensor',
-                                                serial=SERIAL_NUMBER,
-                                                object='temperature')
-            
-            payload = {'availability_topic': TOPIC_AVAILABILITY,
-                       'device': device,
-                       'device_class': 'temperature',
-                       'name': '{} temperature'.format(DEVICE_NAME),
-                       'state_topic': TOPIC_THERMOD_STATUS,
-                       'value_template': '{{ value_json.current_temperature }}',
-                       'unique_id': 'thermod_{}_temperature'.format(SERIAL_NUMBER),
-                       'unit_of_measurement': '°{}'.format(THERMOD_SCALE[0].upper())}
-            
-            _msginfo = client.publish(topic, json.dumps(payload))
-            # TODO intercettare errori e gestire
-            
-            # status
-            topic = _TOPIC_HOMEASSISTANT.format(type='binary_sensor',
-                                                serial=SERIAL_NUMBER,
-                                                object='status')
-            
-            payload = {'availability_topic': TOPIC_AVAILABILITY,
-                       'device': device,
-                       'name': '{} current status'.format(DEVICE_NAME),
-                       'state_topic': TOPIC_THERMOD_STATUS,
-                       'value_template': '{{ value_json.status }}',
-                       'payload_on': 'on',
-                       'payload_off': 'off',
-                       'unique_id': 'thermod_{}_temperature'.format(SERIAL_NUMBER)}
-            
-            _msginfo = client.publish(topic, json.dumps(payload))
-            # TODO intercettare errori e gestire
-            
-            
-            # TODO aggiungere altri sensori
-            
+        # init thermod version with unknown status
+        t_version = None
         
         # create old status
         t_old_status = ThermodStatus(0)
@@ -316,6 +267,57 @@ with requests.Session() as thermod:
         while running:
             _error = False
             try:
+                if HOMEASSISTANT and t_version is None:
+                    logger.debug('retrieving Thermod version')
+                    t_resp = thermod.get('{}/version'.format(THERMOD_URL), timeout=10)
+                    # TODO le eccezioni vanno gestite, con alcune si esce con altre si riprova
+                    t_resp.raise_for_status()
+                    t_version = t_resp.json()['version']
+                    
+                    # common device for all sensors
+                    device = {'identifiers': ['thermod_{}'.format(SERIAL_NUMBER)],
+                              'manufacturer': 'Simone Rossetto',
+                              'model': 'Thermod monitor for MQTT v{}'.format(__version__),
+                              'name': DEVICE_NAME,
+                              'sw_version': t_version}
+                    
+                    # temperature
+                    topic = _TOPIC_HOMEASSISTANT.format(type='sensor',
+                                                        serial=SERIAL_NUMBER,
+                                                        object='temperature')
+                    
+                    payload = {'availability_topic': TOPIC_AVAILABILITY,
+                               'device': device,
+                               'device_class': 'temperature',
+                               'name': '{} temperature'.format(DEVICE_NAME),
+                               'state_topic': TOPIC_THERMOD_STATUS,
+                               'value_template': '{{ value_json.current_temperature }}',
+                               'unique_id': 'thermod_{}_temperature'.format(SERIAL_NUMBER),
+                               'unit_of_measurement': '°{}'.format(THERMOD_SCALE[0].upper())}
+                    
+                    _msginfo = client.publish(topic, json.dumps(payload))
+                    # TODO intercettare errori e gestire
+                    
+                    # status
+                    topic = _TOPIC_HOMEASSISTANT.format(type='binary_sensor',
+                                                        serial=SERIAL_NUMBER,
+                                                        object='status')
+                    
+                    payload = {'availability_topic': TOPIC_AVAILABILITY,
+                               'device': device,
+                               'name': '{} current status'.format(DEVICE_NAME),
+                               'state_topic': TOPIC_THERMOD_STATUS,
+                               'value_template': '{{ value_json.status }}',
+                               'payload_on': 'on',
+                               'payload_off': 'off',
+                               'unique_id': 'thermod_{}_temperature'.format(SERIAL_NUMBER)}
+                    
+                    _msginfo = client.publish(topic, json.dumps(payload))
+                    # TODO intercettare errori e gestire
+                    
+                    # TODO aggiungere altri sensori
+                
+                
                 if last_update > 0:
                     logger.debug('longpolling Thermod status')
                     t_url = '{}/monitor?name={}'.format(THERMOD_URL, __monitor_name__)
@@ -336,7 +338,7 @@ with requests.Session() as thermod:
                 _error = True
             
             except requests.exceptions.Timeout as to:
-                logger.error('no response from Thermod in 10 minutes, probably it is down or unreachable')
+                logger.error('no response from Thermod, probably it is down or unreachable')
                 _error = True
             
             except requests.exceptions.RequestException as re:
