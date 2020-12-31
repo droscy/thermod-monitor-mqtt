@@ -43,9 +43,9 @@ from thermod.common import LogStyleAdapter, LOGGER_BASE_NAME, LOGGER_FMT_MSG, \
     RET_CODE_CFG_FILE_MISSING, RET_CODE_RUN_OTHER_ERR
 from logging.handlers import SysLogHandler
 
-__version__ = '0.0.0.dev6'
+__version__ = '0.0.0.dev7'
 __date__ = '2020-07-01'
-__updated__ = '2020-11-21'
+__updated__ = '2020-12-30'
 
 __monitor_name__ = 'mqtt'
 
@@ -315,6 +315,21 @@ with requests.Session() as thermod:
                     _msginfo = client.publish(topic, json.dumps(payload))
                     # TODO intercettare errori e gestire
                     
+                    # mode
+                    topic = _TOPIC_HOMEASSISTANT.format(type='sensor',
+                                                        serial=SERIAL_NUMBER,
+                                                        object='mode')
+                    
+                    payload = {'availability_topic': TOPIC_AVAILABILITY,
+                               'device': device,
+                               'name': '{} current mode'.format(DEVICE_NAME),
+                               'state_topic': TOPIC_THERMOD_STATUS,
+                               'value_template': '{{ value_json.mode }}',
+                               'unique_id': 'thermod_{}_mode'.format(SERIAL_NUMBER)}
+                    
+                    _msginfo = client.publish(topic, json.dumps(payload))
+                    # TODO intercettare errori e gestire
+                    
                     # TODO aggiungere altri sensori
                 
                 
@@ -370,10 +385,12 @@ with requests.Session() as thermod:
                     last_update = time.time()
                     
                     # encode mode (new name for status)
-                    if t_status.status in ('on', 'off', 'auto'):
-                        _mode = t_status.status[0].upper() + t_status.status[1:]
+                    if t_status.status in ('on', 'off'):
+                        _mode = 'Always {}'.format(t_status.status.upper())
+                    elif t_status.status == 'auto':
+                        _mode = 'Auto'
                     elif t_status.status in ('tmin', 'tmax'):
-                        _mode = 't_{}'.format(t_status.status[1:])
+                        _mode = 'Manual temp. {}'.format(t_status.status.upper())
                     elif t_status.status == 't0':
                         _mode = 'Antifreeze'
                     else:
