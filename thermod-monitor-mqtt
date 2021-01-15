@@ -36,18 +36,62 @@ import configparser
 import requests
 import paho.mqtt.client as mqtt
 
-from thermod import ThermodStatus
-from thermod.common import LogStyleAdapter, LOGGER_BASE_NAME, LOGGER_FMT_MSG, \
-    LOGGER_FMT_TIME, LOGGER_FMT_STYLE, LOGGER_FMT_MSG_SYSLOG, LOGGER_FMT_DATETIME, \
-    RET_CODE_OK, RET_CODE_CFG_FILE_UNKNOWN_ERR, RET_CODE_CFG_FILE_INVALID, \
-    RET_CODE_CFG_FILE_MISSING, RET_CODE_RUN_OTHER_ERR
 from logging.handlers import SysLogHandler
 
-__version__ = '0.0.0.dev7'
+__version__ = '0.0.0.dev8'
 __date__ = '2020-07-01'
-__updated__ = '2020-12-30'
+__updated__ = '2021-01-15'
 
 __monitor_name__ = 'mqtt'
+
+# try to import common settings from thermod module
+try:
+    from thermod.common import LogStyleAdapter, LOGGER_BASE_NAME, LOGGER_FMT_MSG, \
+        LOGGER_FMT_TIME, LOGGER_FMT_STYLE, LOGGER_FMT_MSG_SYSLOG, LOGGER_FMT_DATETIME, \
+        RET_CODE_OK, RET_CODE_CFG_FILE_UNKNOWN_ERR, RET_CODE_CFG_FILE_INVALID, \
+        RET_CODE_CFG_FILE_MISSING, RET_CODE_RUN_OTHER_ERR
+
+# otherwise define such settings
+except:
+    LOGGER_BASE_NAME = 'thermod'
+    LOGGER_FMT_MSG = '{asctime},{msecs:03.0f} {name:19s} {levelname:8s} {message}'
+    LOGGER_FMT_MSG_SYSLOG = '{name}[{process:d}]: {levelname} {message}'
+    LOGGER_FMT_DATETIME = '%Y-%m-%d %H:%M:%S'
+    LOGGER_FMT_TIME = '%H:%M:%S'
+    LOGGER_FMT_STYLE = '{'
+    RET_CODE_OK = 0
+    RET_CODE_CFG_FILE_UNKNOWN_ERR = 13
+    RET_CODE_CFG_FILE_INVALID = 12
+    RET_CODE_CFG_FILE_MISSING = 10
+    RET_CODE_RUN_OTHER_ERR = 59
+    
+    class LogStyleAdapter(logging.LoggerAdapter):
+        """Format message with {}-arguments."""
+        
+        def __init__(self, logger, extra=None):
+            super().__init__(logger, extra)
+        
+        def log(self, level, msg, *args, **kwargs):
+            if self.isEnabledFor(level):
+            
+                kwa = {'extra': self.extra}
+                for kw in ('exc_info', 'stack_info'):
+                    try:
+                        kwa[kw] = kwargs[kw]
+                    except:
+                        pass
+                
+                self.logger._log(level, msg.format(*args, **kwargs), (), **kwa)
+        
+        def addHandler(self, hdlr):
+            self.logger.addHandler(hdlr)
+        
+        @property
+        def level(self):
+            return self.logger.level
+        
+        def setLevel(self, level):
+            self.logger.setLevel(level)
 
 # setting up logging system
 logger = LogStyleAdapter(logging.getLogger('{}.{}'.format(LOGGER_BASE_NAME, __monitor_name__)))
@@ -259,7 +303,7 @@ with requests.Session() as thermod:
         t_version = None
         
         # create old status
-        t_old_status = ThermodStatus(0)
+        t_old_status = {}
         
         # set first update time (never, epoch)
         last_update = 0
@@ -345,8 +389,8 @@ with requests.Session() as thermod:
                 t_resp.raise_for_status()
                 
                 logger.debug('processing data returned from Thermod')
-                t_jrsp = t_resp.json()
-                t_status = ThermodStatus(**t_jrsp)
+                t_status = t_resp.json()
+                del t_status['timestamp']
             
             except (KeyError, ValueError) as ve:
                 logger.error('invalid data returned from Thermod: {}', ve)
@@ -366,7 +410,7 @@ with requests.Session() as thermod:
             
             else:
                 _update = False
-                if t_old_status[1:] != t_status[1:]:
+                if t_old_status != t_status:
                     _update = True
                     logger.debug('publish message due to Thermod status change')
                 
@@ -385,23 +429,23 @@ with requests.Session() as thermod:
                     last_update = time.time()
                     
                     # encode mode (new name for status)
-                    if t_status.status in ('on', 'off'):
-                        _mode = 'Always {}'.format(t_status.status.upper())
-                    elif t_status.status == 'auto':
+                    if t_status['status'] in ('on', 'off'):
+                        _mode = 'Always {}'.format(t_status['status'].upper())
+                    elif t_status['status'] == 'auto':
                         _mode = 'Auto'
-                    elif t_status.status in ('tmin', 'tmax'):
-                        _mode = 'Manual temp. {}'.format(t_status.status.upper())
-                    elif t_status.status == 't0':
+                    elif t_status['status'] in ('tmin', 'tmax'):
+                        _mode = 'Manual temp. {}'.format(t_status['status'].upper())
+                    elif t_status['status'] == 't0':
                         _mode = 'Antifreeze'
                     else:
-                        _mode = t_status.status
+                        _mode = t_status['status']
                     
                     # publish message
                     payload = {'mode': _mode,
-                               'device': 'Cooling' if t_status.cooling else 'Heating',
-                               'status': 'on' if t_status.heating_status==1 else 'off',
-                               'current_temperature': t_status.current_temperature,
-                               'target_temperature': t_status.target_temperature}
+                               'device': 'Cooling' if t_status['cooling'] else 'Heating',
+                               'status': 'on' if t_status['heating_status']==1 else 'off',
+                               'current_temperature': t_status['current_temperature'],
+                               'target_temperature': t_status['target_temperature']}
                     
                     _msginfo = client.publish(TOPIC_THERMOD_STATUS, json.dumps(payload), retain=True)
                     

@@ -22,7 +22,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from setuptools import setup
 
-__updated__ = '2020-10-21'
+__updated__ = '2021-01-15'
 
 def get_version():
     main_ns = {}
@@ -59,8 +59,7 @@ setup(name='thermod-monitor-mqtt',
                    'Topic :: Home Automation'],
       scripts=['thermod-monitor-mqtt'],
       python_requires='>=3.5',
-      install_requires=['thermod >=1.0.0, <2.0.0',
-                        'requests >=2.20.0',
+      install_requires=['requests >=2.20.0',
                         'paho-mqtt >=1.5.0'])
 
 # vim: fileencoding=utf-8 tabstop=4 shiftwidth=4 expandtab

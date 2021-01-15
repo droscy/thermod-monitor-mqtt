@@ -28,7 +28,6 @@ GNU General Public License v3
 *Thermod monitor for MQTT* requires [Python3](https://www.python.org/)
 (at least version 3.5) and the following packages:
 
- - [thermod](https://github.com/droscy/thermod) (>=1.0.0, <2.0.0)
  - [requests](http://docs.python-requests.org/) (>=2.20.0)
  - [phao-mqtt](https://pypi.org/project/paho-mqtt/) (>= 1.5.0)
 
@@ -41,16 +40,14 @@ the system, then the basic steps are:
 
  2. create e virtualenv somewhere
 
- 3. install [thermod](https://github.com/droscy/thermod) package in that virtualenv (see its readme on how to install)
-
- 4. using the same virtualenv, install dependecies and this monitor with
+ 3. using that virtualenv, install dependecies and this monitor with
 
        ```bash
        pip install -r requirements.txt
        python3 setup.py install
        ```
 
- 5. copy the config file `monitor-mqtt.conf` in one of the following folder (the top-most take precedence)
+ 4. copy the config file `monitor-mqtt.conf` in one of the following folder (the top-most take precedence)
 
     - `~/.thermod/`
     - `~/.config/thermod/`
