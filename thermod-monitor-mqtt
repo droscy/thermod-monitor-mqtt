@@ -36,9 +36,10 @@ import configparser
 import requests
 import paho.mqtt.client as mqtt
 
+from copy import copy
 from logging.handlers import SysLogHandler
 
-__version__ = '0.0.0.dev8'
+__version__ = '0.0.0.dev9'
 __date__ = '2020-07-01'
 __updated__ = '2021-01-15'
 
@@ -423,27 +424,33 @@ with requests.Session() as thermod:
                 
                 if _update:
                     # save old thermod status
-                    t_old_status = t_status
+                    t_old_status = copy(t_status)
                     
                     # save last time update
                     last_update = time.time()
                     
-                    # encode mode (new name for status)
-                    if t_status['status'] in ('on', 'off'):
+                    # handle thermod v1.x
+                    if int(t_version[0]) == 1:
+                        t_status['mode'] = t_status['status']
+                        t_status['hvac_mode'] = 'cooling' if t_status['cooling'] else 'heating'
+                        t_status['status'] = t_status['heating_status']
+                    
+                    # encode mode
+                    if t_status['mode'] in ('on', 'off'):
                         _mode = 'Always {}'.format(t_status['status'].upper())
-                    elif t_status['status'] == 'auto':
+                    elif t_status['mode'] == 'auto':
                         _mode = 'Auto'
-                    elif t_status['status'] in ('tmin', 'tmax'):
+                    elif t_status['mode'] in ('tmin', 'tmax'):
                         _mode = 'Manual temp. {}'.format(t_status['status'].upper())
-                    elif t_status['status'] == 't0':
+                    elif t_status['mode'] == 't0':
                         _mode = 'Antifreeze'
                     else:
                         _mode = t_status['status']
                     
                     # publish message
                     payload = {'mode': _mode,
-                               'device': 'Cooling' if t_status['cooling'] else 'Heating',
-                               'status': 'on' if t_status['heating_status']==1 else 'off',
+                               'device': '{}{}'.format(t_status['hvac_mode'][0].upper(), t_status['hvac_mode'][1:]),
+                               'status': 'on' if t_status['status']==1 else 'off',
                                'current_temperature': t_status['current_temperature'],
                                'target_temperature': t_status['target_temperature']}
                     
