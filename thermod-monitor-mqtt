@@ -39,9 +39,9 @@ import paho.mqtt.client as mqtt
 from copy import copy
 from logging.handlers import SysLogHandler
 
-__version__ = '0.0.0.dev9'
+__version__ = '0.0.0.dev11'
 __date__ = '2020-07-01'
-__updated__ = '2021-01-15'
+__updated__ = '2021-01-25'
 
 __monitor_name__ = 'mqtt'
 
@@ -124,6 +124,7 @@ _TOPIC_HOMEASSISTANT = 'homeassistant/{type}/thermod_{serial}/{object}/config'
 # shutdown check and return code
 running = True
 main_return_code = RET_CODE_OK
+force_update = False
 
 def shutdown(signum=None, frame=None, exitcode=0):
     global running, main_return_code
@@ -131,8 +132,13 @@ def shutdown(signum=None, frame=None, exitcode=0):
     running = False
     main_return_code = exitcode
 
+def set_force_update(signum=None, frame=None):
+    global force_update
+    logger.info('force update requested')
+    force_update = True
+
 signal.signal(signal.SIGTERM, shutdown)
-# TODO add USR1 signal to force mqtt update
+signal.signal(signal.SIGUSR1, set_force_update)
 
 # parse input arguments
 parser = argparse.ArgumentParser(description='Thermod monitor for MQTT broker: read data from Thermod and send it to an MQTT broker.')
@@ -340,7 +346,7 @@ with requests.Session() as thermod:
                                'unique_id': 'thermod_{}_temperature'.format(SERIAL_NUMBER),
                                'unit_of_measurement': '°{}'.format(THERMOD_SCALE[0].upper())}
                     
-                    _msginfo = client.publish(topic, json.dumps(payload))
+                    _msginfo = client.publish(topic, json.dumps(payload), retain=True)
                     # TODO intercettare errori e gestire
                     
                     # status
@@ -357,7 +363,7 @@ with requests.Session() as thermod:
                                'payload_off': 'off',
                                'unique_id': 'thermod_{}_temperature'.format(SERIAL_NUMBER)}
                     
-                    _msginfo = client.publish(topic, json.dumps(payload))
+                    _msginfo = client.publish(topic, json.dumps(payload), retain=True)
                     # TODO intercettare errori e gestire
                     
                     # mode
@@ -372,7 +378,7 @@ with requests.Session() as thermod:
                                'value_template': '{{ value_json.mode }}',
                                'unique_id': 'thermod_{}_mode'.format(SERIAL_NUMBER)}
                     
-                    _msginfo = client.publish(topic, json.dumps(payload))
+                    _msginfo = client.publish(topic, json.dumps(payload), retain=True)
                     # TODO intercettare errori e gestire
                     
                     # TODO aggiungere altri sensori
@@ -411,6 +417,7 @@ with requests.Session() as thermod:
             
             else:
                 _update = False
+                
                 if t_old_status != t_status:
                     _update = True
                     logger.debug('publish message due to Thermod status change')
@@ -418,6 +425,10 @@ with requests.Session() as thermod:
                 elif (time.time() - last_update) >= FORCE_UPDATE_TIME * 60:
                     _update = True
                     logger.debug('publish message due to timeout')
+                
+                elif force_update is True:
+                    _update = True
+                    logger.debug('publish message due to force update set')
                 
                 else:
                     logger.debug('old status and current status are equal, no need to publish a message')
@@ -437,15 +448,15 @@ with requests.Session() as thermod:
                     
                     # encode mode
                     if t_status['mode'] in ('on', 'off'):
-                        _mode = 'Always {}'.format(t_status['status'].upper())
+                        _mode = 'Always {}'.format(t_status['mode'].upper())
                     elif t_status['mode'] == 'auto':
                         _mode = 'Auto'
                     elif t_status['mode'] in ('tmin', 'tmax'):
-                        _mode = 'Manual temp. {}'.format(t_status['status'].upper())
+                        _mode = 'Manual {}'.format(t_status['mode'][1:].upper())
                     elif t_status['mode'] == 't0':
                         _mode = 'Antifreeze'
                     else:
-                        _mode = t_status['status']
+                        _mode = t_status['mode']
                     
                     # publish message
                     payload = {'mode': _mode,
@@ -459,6 +470,11 @@ with requests.Session() as thermod:
                     if _msginfo.rc != mqtt.MQTT_ERR_SUCCESS:
                         # TODO intercettare gli errori
                         pass
+                    
+                    # reset force_update
+                    if force_update:
+                        logger.debug('reset force update')
+                        force_update = False
             
             if _error:
                 logger.debug('sleeping for {} seconds', SLEEP_TIME)
