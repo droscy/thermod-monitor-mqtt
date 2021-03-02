@@ -39,9 +39,9 @@ import paho.mqtt.client as mqtt
 from copy import copy
 from logging.handlers import SysLogHandler
 
-__version__ = '0.0.0.dev11'
+__version__ = '0.0.0.dev13'
 __date__ = '2020-07-01'
-__updated__ = '2021-01-25'
+__updated__ = '2021-03-02'
 
 __monitor_name__ = 'mqtt'
 
@@ -229,9 +229,9 @@ try:
     BROKER_USER = cfg.get('monitor/mqtt/broker', 'username', fallback=None)
     BROKER_PASSWD = cfg.get('monitor/mqtt/broker', 'password', fallback=None)
     BROKER_CA = cfg.get('monitor/mqtt/broker', 'cacert', fallback=None)
-    BROKER_CERT = cfg.get('monitor/mqtt/broker', 'certfile', fallback=None)
-    BROKER_KEY = cfg.get('monitor/mqtt/broker', 'keyfile', fallback=None)
-    BROKER_INSECURE = cfg.getboolean('monitor/mqtt/broker', 'insecure', fallback=False)
+    BROKER_CERT = cfg.get('monitor/mqtt/broker', 'certfile', fallback=None) or None
+    BROKER_KEY = cfg.get('monitor/mqtt/broker', 'keyfile', fallback=None) or None
+    BROKER_INSECURE = cfg.getboolean('monitor/mqtt/broker', 'insecure', fallback=False) or False
     # TODO log dei parametri del broker
     
     try:
@@ -318,70 +318,71 @@ with requests.Session() as thermod:
         while running:
             _error = False
             try:
-                if HOMEASSISTANT and t_version is None:
+                if t_version is None:
                     logger.debug('retrieving Thermod version')
                     t_resp = thermod.get('{}/version'.format(THERMOD_URL), timeout=10)
                     # TODO le eccezioni vanno gestite, con alcune si esce con altre si riprova
                     t_resp.raise_for_status()
                     t_version = t_resp.json()['version']
                     
-                    # common device for all sensors
-                    device = {'identifiers': ['thermod_{}'.format(SERIAL_NUMBER)],
-                              'manufacturer': 'Simone Rossetto',
-                              'model': 'Thermod monitor for MQTT v{}'.format(__version__),
-                              'name': DEVICE_NAME,
-                              'sw_version': t_version}
-                    
-                    # temperature
-                    topic = _TOPIC_HOMEASSISTANT.format(type='sensor',
-                                                        serial=SERIAL_NUMBER,
-                                                        object='temperature')
-                    
-                    payload = {'availability_topic': TOPIC_AVAILABILITY,
-                               'device': device,
-                               'device_class': 'temperature',
-                               'name': '{} temperature'.format(DEVICE_NAME),
-                               'state_topic': TOPIC_THERMOD_STATUS,
-                               'value_template': '{{ value_json.current_temperature }}',
-                               'unique_id': 'thermod_{}_temperature'.format(SERIAL_NUMBER),
-                               'unit_of_measurement': '°{}'.format(THERMOD_SCALE[0].upper())}
-                    
-                    _msginfo = client.publish(topic, json.dumps(payload), retain=True)
-                    # TODO intercettare errori e gestire
-                    
-                    # status
-                    topic = _TOPIC_HOMEASSISTANT.format(type='binary_sensor',
-                                                        serial=SERIAL_NUMBER,
-                                                        object='status')
-                    
-                    payload = {'availability_topic': TOPIC_AVAILABILITY,
-                               'device': device,
-                               'name': '{} current status'.format(DEVICE_NAME),
-                               'state_topic': TOPIC_THERMOD_STATUS,
-                               'value_template': '{{ value_json.status }}',
-                               'payload_on': 'on',
-                               'payload_off': 'off',
-                               'unique_id': 'thermod_{}_temperature'.format(SERIAL_NUMBER)}
-                    
-                    _msginfo = client.publish(topic, json.dumps(payload), retain=True)
-                    # TODO intercettare errori e gestire
-                    
-                    # mode
-                    topic = _TOPIC_HOMEASSISTANT.format(type='sensor',
-                                                        serial=SERIAL_NUMBER,
-                                                        object='mode')
-                    
-                    payload = {'availability_topic': TOPIC_AVAILABILITY,
-                               'device': device,
-                               'name': '{} current mode'.format(DEVICE_NAME),
-                               'state_topic': TOPIC_THERMOD_STATUS,
-                               'value_template': '{{ value_json.mode }}',
-                               'unique_id': 'thermod_{}_mode'.format(SERIAL_NUMBER)}
-                    
-                    _msginfo = client.publish(topic, json.dumps(payload), retain=True)
-                    # TODO intercettare errori e gestire
-                    
-                    # TODO aggiungere altri sensori
+                    if HOMEASSISTANT:
+                        # common device for all sensors
+                        device = {'identifiers': ['thermod_{}'.format(SERIAL_NUMBER)],
+                                  'manufacturer': 'Simone Rossetto',
+                                  'model': 'Thermod monitor for MQTT v{}'.format(__version__),
+                                  'name': DEVICE_NAME,
+                                  'sw_version': t_version}
+                        
+                        # temperature
+                        topic = _TOPIC_HOMEASSISTANT.format(type='sensor',
+                                                            serial=SERIAL_NUMBER,
+                                                            object='temperature')
+                        
+                        payload = {'availability_topic': TOPIC_AVAILABILITY,
+                                   'device': device,
+                                   'device_class': 'temperature',
+                                   'name': '{} temperature'.format(DEVICE_NAME),
+                                   'state_topic': TOPIC_THERMOD_STATUS,
+                                   'value_template': '{{ value_json.current_temperature }}',
+                                   'unique_id': 'thermod_{}_temperature'.format(SERIAL_NUMBER),
+                                   'unit_of_measurement': '°{}'.format(THERMOD_SCALE[0].upper())}
+                        
+                        _msginfo = client.publish(topic, json.dumps(payload), retain=True)
+                        # TODO intercettare errori e gestire
+                        
+                        # status
+                        topic = _TOPIC_HOMEASSISTANT.format(type='binary_sensor',
+                                                            serial=SERIAL_NUMBER,
+                                                            object='status')
+                        
+                        payload = {'availability_topic': TOPIC_AVAILABILITY,
+                                   'device': device,
+                                   'name': '{} current status'.format(DEVICE_NAME),
+                                   'state_topic': TOPIC_THERMOD_STATUS,
+                                   'value_template': '{{ value_json.status }}',
+                                   'payload_on': 'on',
+                                   'payload_off': 'off',
+                                   'unique_id': 'thermod_{}_temperature'.format(SERIAL_NUMBER)}
+                        
+                        _msginfo = client.publish(topic, json.dumps(payload), retain=True)
+                        # TODO intercettare errori e gestire
+                        
+                        # mode
+                        topic = _TOPIC_HOMEASSISTANT.format(type='sensor',
+                                                            serial=SERIAL_NUMBER,
+                                                            object='mode')
+                        
+                        payload = {'availability_topic': TOPIC_AVAILABILITY,
+                                   'device': device,
+                                   'name': '{} current mode'.format(DEVICE_NAME),
+                                   'state_topic': TOPIC_THERMOD_STATUS,
+                                   'value_template': '{{ value_json.mode }}',
+                                   'unique_id': 'thermod_{}_mode'.format(SERIAL_NUMBER)}
+                        
+                        _msginfo = client.publish(topic, json.dumps(payload), retain=True)
+                        # TODO intercettare errori e gestire
+                        
+                        # TODO aggiungere altri sensori
                 
                 
                 if last_update > 0:
