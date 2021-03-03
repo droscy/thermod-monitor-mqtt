@@ -4,7 +4,7 @@
 Thermod monitor to forward temperature and current status to an MQTT broker
 
 @author:     Simone Rossetto
-@copyright:  2020 Simone Rossetto
+@copyright:  2021 Simone Rossetto
 @license:    GNU General Public License v3
 @contact:    simros85@gmail.com
 
@@ -39,9 +39,9 @@ import paho.mqtt.client as mqtt
 from copy import copy
 from logging.handlers import SysLogHandler
 
-__version__ = '0.0.0.dev13'
+__version__ = '0.0.0.dev14'
 __date__ = '2020-07-01'
-__updated__ = '2021-03-02'
+__updated__ = '2021-03-03'
 
 __monitor_name__ = 'mqtt'
 
@@ -144,6 +144,7 @@ signal.signal(signal.SIGUSR1, set_force_update)
 parser = argparse.ArgumentParser(description='Thermod monitor for MQTT broker: read data from Thermod and send it to an MQTT broker.')
 parser.add_argument('-C', '--config', action='store', default=None, help='path to configuration file')
 parser.add_argument('--config-serial', action='store', default=None, help='path to configuration file with Thermod serial number')
+parser.add_argument('--serial', action='store', default=None, help='Thermod serial number (take precedence over serial number in config files)')
 parser.add_argument('-L', '--log', action='store', default=None, help='write log messages to LOG file (full path)')
 parser.add_argument('-D', '--debug', action='store_true', help='start the monitor in debug mode')
 parser.add_argument('--syslog', action='store_true', help='log messages to syslog (useful if started by systemd)')
@@ -235,7 +236,7 @@ try:
     # TODO log dei parametri del broker
     
     try:
-        SERIAL_NUMBER = cfg['thermod']['serial_number']
+        SERIAL_NUMBER = args.serial if args.serial else cfg['thermod']['serial_number']
     
     except KeyError:
         # generate serial number

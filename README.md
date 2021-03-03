@@ -5,7 +5,7 @@ It also support Home Assistant topic for auto-discovery of sensors.
 
 ## License
 Thermod monitor for MQTT v0.0.0-dev \
-Copyright (C) 2020 Simone Rossetto <simros85@gmail.com> \
+Copyright (C) 2021 Simone Rossetto <simros85@gmail.com> \
 GNU General Public License v3
 
     This program is free software: you can redistribute it and/or modify
@@ -40,11 +40,16 @@ the system, then the basic steps are:
 
  2. create e virtualenv somewhere
 
- 3. using that virtualenv, install dependecies and this monitor with
+ 3. using that virtualenv, install this monitor with
 
        ```bash
-       pip install -r requirements.txt
        python3 setup.py install
+       ```
+
+    or
+
+       ```bash
+       pip install /path/to/sources
        ```
 
  4. copy the config file `monitor-mqtt.conf` in one of the following folder (the top-most take precedence)
@@ -56,4 +61,22 @@ the system, then the basic steps are:
     - `/etc/thermod/`
 
     and adjust it to your needs.
+
+## Starting/Stopping the daemon
+If *systemd* is in use in the system, copy the file `systemd.service.inc`
+to `/etc/systemd/system/thermod-monitor-mqtt.service` and change it to your
+needs (pay attention to `User` value and `ExecStart` path).
+
+To automatically start the monitor at system startup execute:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable thermod-monitor-mqtt.service
+```
+
+To manually start/stop the monitor execute:
+
+```bash
+sudo systemctl [start|stop] thermod-monitor-mqtt.service
+```
 

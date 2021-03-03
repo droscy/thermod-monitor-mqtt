@@ -2,7 +2,7 @@
 """Setup script for MQTT Thermod monitor
 
 @author:     Simone Rossetto
-@copyright:  2020 Simone Rossetto
+@copyright:  2021 Simone Rossetto
 @license:    GNU General Public License v3
 @contact:    simros85@gmail.com
 
@@ -22,7 +22,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from setuptools import setup
 
-__updated__ = '2021-01-15'
+__updated__ = '2021-03-03'
 
 def get_version():
     main_ns = {}
