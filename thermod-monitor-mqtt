@@ -39,9 +39,9 @@ import paho.mqtt.client as mqtt
 from copy import copy
 from logging.handlers import SysLogHandler
 
-__version__ = '0.0.0.dev14'
+__version__ = '0.0.0.dev15'
 __date__ = '2020-07-01'
-__updated__ = '2021-03-03'
+__updated__ = '2021-03-05'
 
 __monitor_name__ = 'mqtt'
 
@@ -316,8 +316,8 @@ with requests.Session() as thermod:
         # set first update time (never, epoch)
         last_update = 0
         
+        _error = False
         while running:
-            _error = False
             try:
                 if t_version is None:
                     logger.debug('retrieving Thermod version')
@@ -418,6 +418,13 @@ with requests.Session() as thermod:
                 shutdown()
             
             else:
+                if _error:
+                    # There was an error in previous execution of this loop but
+                    # not in this, so we reset the _error and set thermod online again.
+                    _error = False
+                    logger.debug('set online availability of thermod in mqtt')
+                    client.publish(TOPIC_AVAILABILITY, 'online', retain=True)
+                
                 _update = False
                 
                 if t_old_status != t_status:
@@ -479,6 +486,11 @@ with requests.Session() as thermod:
                         force_update = False
             
             if _error:
+                t_version = None
+                
+                logger.debug('set offline availability of thermod in mqtt')
+                client.publish(TOPIC_AVAILABILITY, 'offline', retain=True)
+                
                 logger.debug('sleeping for {} seconds', SLEEP_TIME)
                 time.sleep(SLEEP_TIME)
     

@@ -1,3 +1,5 @@
-venv
+venv/
 monitor-mqtt.test.conf
 serial-number.conf
+dist/
+*.egg-info/
